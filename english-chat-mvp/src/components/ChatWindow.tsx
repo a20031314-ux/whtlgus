@@ -332,6 +332,7 @@ export function ChatWindow() {
   const [locale, setLocale] = useState<Locale>("ko");
   const ui = copy[locale];
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   const [mode, setMode] = useState<InputMode>("chat");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
@@ -388,6 +389,13 @@ export function ChatWindow() {
       setSessionEnded(true);
     }
   }, [isSessionLimitReached, sessionEnded]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, [turns, currentSessionId]);
 
   const sendChatMessage = async (message: string) => {
     const response = await fetch("/api/chat", {
@@ -629,17 +637,17 @@ export function ChatWindow() {
               <div className="flex gap-1">
                 <button
                   type="button"
+                  onClick={() => setIsArchiveOpen(true)}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  ☰
+                </button>
+                <button
+                  type="button"
                   onClick={endCurrentSession}
                   className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
                 >
                   {ui.endSession}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsArchiveOpen(true)}
-                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
-                >
-                  {ui.archive}
                 </button>
               </div>
             </div>
@@ -753,6 +761,7 @@ export function ChatWindow() {
               </article>
             );
           })}
+          <div ref={bottomRef} />
         </div>
 
         <form
@@ -823,37 +832,36 @@ export function ChatWindow() {
         </form>
       </section>
 
-      {isArchiveOpen && (
-        <ArchivePanel
-          savedItems={savedItems}
-          conversationSessions={conversationSessions}
-          ui={ui}
-          onClose={() => setIsArchiveOpen(false)}
-          onReuseSavedItem={(text) => {
-            setMode("chat");
-            setInput(text);
-            setIsArchiveOpen(false);
-            requestAnimationFrame(() => inputRef.current?.focus());
-          }}
-          onDeleteSavedItem={(id) => {
-            deleteSavedItem(id);
-            setSavedItems(loadSavedItems());
-          }}
-          onClearSavedItems={() => {
-            clearSavedItems();
-            setSavedItems(loadSavedItems());
-          }}
-          onDeleteConversationSession={(id) => {
-            deleteConversationSession(id);
-            setConversationSessions(loadConversationSessions());
-          }}
-          onClearConversationSessions={() => {
-            clearConversationSessions();
-            setConversationSessions(loadConversationSessions());
-          }}
-          onOpenConversationSession={openConversationSession}
-        />
-      )}
+      <ArchivePanel
+        isOpen={isArchiveOpen}
+        savedItems={savedItems}
+        conversationSessions={conversationSessions}
+        ui={ui}
+        onClose={() => setIsArchiveOpen(false)}
+        onReuseSavedItem={(text) => {
+          setMode("chat");
+          setInput(text);
+          setIsArchiveOpen(false);
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }}
+        onDeleteSavedItem={(id) => {
+          deleteSavedItem(id);
+          setSavedItems(loadSavedItems());
+        }}
+        onClearSavedItems={() => {
+          clearSavedItems();
+          setSavedItems(loadSavedItems());
+        }}
+        onDeleteConversationSession={(id) => {
+          deleteConversationSession(id);
+          setConversationSessions(loadConversationSessions());
+        }}
+        onClearConversationSessions={() => {
+          clearConversationSessions();
+          setConversationSessions(loadConversationSessions());
+        }}
+        onOpenConversationSession={openConversationSession}
+      />
     </>
   );
 }
