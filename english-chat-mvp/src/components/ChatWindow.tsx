@@ -58,13 +58,8 @@ type ExpressionApiResponse = {
 };
 
 const SESSION_MESSAGE_LIMIT = 15;
-const IS_FREE_MODE = true;
 const SAVED_ITEMS_KEY = "savedItems";
 const CONVERSATION_SESSIONS_KEY = "conversationSessions";
-
-function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function normalizeCorrectionResult(
   originalMessage: string,
@@ -92,52 +87,8 @@ function normalizeCorrectionResult(
   };
 }
 
-function buildConversationSession(turns: ChatTurn[]): ConversationSession {
-  const messages: ChatMessage[] = turns.flatMap((turn) => {
-    const userMessage: ChatMessage = {
-      id: `${turn.id}-user`,
-      role: "user",
-      content: turn.userMessage,
-      createdAt: Date.now(),
-    };
-
-    if (turn.mode === "chat" && turn.assistantMessage) {
-      return [
-        userMessage,
-        {
-          id: `${turn.id}-assistant`,
-          role: "assistant",
-          content: turn.assistantMessage,
-          createdAt: Date.now(),
-        },
-      ];
-    }
-
-    if (turn.mode === "how_to_say" && turn.expressionResult) {
-      return [
-        userMessage,
-        {
-          id: `${turn.id}-helper`,
-          role: "helper",
-          content: `${turn.expressionResult.expression}\n${turn.expressionResult.explanation}\n${turn.expressionResult.example}`,
-          createdAt: Date.now(),
-        },
-      ];
-    }
-
-    return [userMessage];
-  });
-
-  const firstMessage = turns[0]?.userMessage || "Conversation Session";
-  return {
-    id: `session-${Date.now()}`,
-    title:
-      firstMessage.length > 28 ? `${firstMessage.slice(0, 28)}...` : firstMessage,
-    createdAt: Date.now(),
-    endedAt: Date.now(),
-    messageCount: messages.length,
-    messages,
-  };
+function makeSessionId() {
+  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function loadSavedItems(): SavedItem[] {
@@ -150,7 +101,6 @@ function loadSavedItems(): SavedItem[] {
     if (!raw) {
       return [];
     }
-
     const parsed = JSON.parse(raw) as SavedItem[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -167,7 +117,6 @@ function saveSavedItem(item: SavedItem) {
   if (current.some((saved) => saved.id === item.id)) {
     return;
   }
-
   window.localStorage.setItem(SAVED_ITEMS_KEY, JSON.stringify([item, ...current]));
 }
 
@@ -175,9 +124,7 @@ function deleteSavedItem(id: string) {
   if (typeof window === "undefined") {
     return;
   }
-
-  const current = loadSavedItems();
-  const next = current.filter((item) => item.id !== id);
+  const next = loadSavedItems().filter((item) => item.id !== id);
   window.localStorage.setItem(SAVED_ITEMS_KEY, JSON.stringify(next));
 }
 
@@ -185,7 +132,6 @@ function clearSavedItems() {
   if (typeof window === "undefined") {
     return;
   }
-
   window.localStorage.setItem(SAVED_ITEMS_KEY, JSON.stringify([]));
 }
 
@@ -199,7 +145,6 @@ function loadConversationSessions(): ConversationSession[] {
     if (!raw) {
       return [];
     }
-
     const parsed = JSON.parse(raw) as ConversationSession[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -213,9 +158,10 @@ function saveConversationSession(session: ConversationSession) {
   }
 
   const current = loadConversationSessions();
+  const withoutCurrent = current.filter((item) => item.id !== session.id);
   window.localStorage.setItem(
     CONVERSATION_SESSIONS_KEY,
-    JSON.stringify([session, ...current]),
+    JSON.stringify([session, ...withoutCurrent]),
   );
 }
 
@@ -223,9 +169,7 @@ function deleteConversationSession(id: string) {
   if (typeof window === "undefined") {
     return;
   }
-
-  const current = loadConversationSessions();
-  const next = current.filter((session) => session.id !== id);
+  const next = loadConversationSessions().filter((session) => session.id !== id);
   window.localStorage.setItem(CONVERSATION_SESSIONS_KEY, JSON.stringify(next));
 }
 
@@ -233,8 +177,121 @@ function clearConversationSessions() {
   if (typeof window === "undefined") {
     return;
   }
-
   window.localStorage.setItem(CONVERSATION_SESSIONS_KEY, JSON.stringify([]));
+}
+
+function toSessionMessages(turns: ChatTurn[]): ChatMessage[] {
+  return turns.flatMap((turn) => {
+    const userMessage: ChatMessage = {
+      id: `${turn.id}-user`,
+      role: "user",
+      content: turn.userMessage,
+      createdAt: Date.now(),
+    };
+
+    if (turn.mode === "chat") {
+      const assistantPayload = {
+        assistantMessage: turn.assistantMessage || "",
+        correctionResult: turn.correctionResult || null,
+      };
+      return [
+        userMessage,
+        {
+          id: `${turn.id}-assistant`,
+          role: "assistant",
+          content: JSON.stringify(assistantPayload),
+          createdAt: Date.now(),
+        },
+      ];
+    }
+
+    if (turn.expressionResult) {
+      return [
+        userMessage,
+        {
+          id: `${turn.id}-helper`,
+          role: "helper",
+          content: JSON.stringify({ expressionResult: turn.expressionResult }),
+          createdAt: Date.now(),
+        },
+      ];
+    }
+
+    return [userMessage];
+  });
+}
+
+function fromSessionMessages(messages: ChatMessage[]): ChatTurn[] {
+  const turns: ChatTurn[] = [];
+  let pendingUser: ChatMessage | null = null;
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      pendingUser = message;
+      continue;
+    }
+
+    if (!pendingUser) {
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      let assistantMessage = "";
+      let correctionResult: CorrectionResult | undefined;
+      try {
+        const parsed = JSON.parse(message.content) as {
+          assistantMessage?: string;
+          correctionResult?: CorrectionResult;
+        };
+        assistantMessage = parsed.assistantMessage || "";
+        correctionResult = parsed.correctionResult;
+      } catch {
+        assistantMessage = message.content;
+      }
+
+      turns.push({
+        id: pendingUser.id.replace("-user", ""),
+        mode: "chat",
+        userMessage: pendingUser.content,
+        assistantMessage,
+        correctionResult,
+      });
+      pendingUser = null;
+      continue;
+    }
+
+    if (message.role === "helper") {
+      let expressionResult: ExpressionResult = {
+        expression: pendingUser.content,
+        explanation: "",
+        example: "",
+      };
+      try {
+        const parsed = JSON.parse(message.content) as {
+          expressionResult?: ExpressionResult;
+        };
+        if (parsed.expressionResult) {
+          expressionResult = parsed.expressionResult;
+        }
+      } catch {
+        expressionResult = {
+          expression: message.content,
+          explanation: "",
+          example: "",
+        };
+      }
+
+      turns.push({
+        id: pendingUser.id.replace("-user", ""),
+        mode: "how_to_say",
+        userMessage: pendingUser.content,
+        expressionResult,
+      });
+      pendingUser = null;
+    }
+  }
+
+  return turns;
 }
 
 function buildCorrectionSavedItem(turn: ChatTurn): SavedItem | null {
@@ -280,22 +337,23 @@ export function ChatWindow() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
-  const [todayKey, setTodayKey] = useState(getTodayKey());
-  const [messagesToday, setMessagesToday] = useState(0);
   const [savedItems, setSavedItems] = useState<SavedItem[]>([]);
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>(
     [],
   );
+  const [currentSessionId, setCurrentSessionId] = useState<string>(makeSessionId());
+  const [currentSessionCreatedAt, setCurrentSessionCreatedAt] = useState<number>(
+    Date.now(),
+  );
   const [isArchiveOpen, setIsArchiveOpen] = useState(false);
-  const [sessionSaved, setSessionSaved] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
 
   const remainingMessages = useMemo(
-    () => SESSION_MESSAGE_LIMIT - messagesToday,
-    [messagesToday],
+    () => SESSION_MESSAGE_LIMIT - turns.length,
+    [turns.length],
   );
   const isSessionLimitReached = remainingMessages <= 0;
-  const [isContinueUnlocked, setIsContinueUnlocked] = useState(false);
-  const isInputDisabled = isSessionLimitReached && !(isContinueUnlocked && !IS_FREE_MODE);
+  const isInputDisabled = isSessionLimitReached;
 
   useEffect(() => {
     setSavedItems(loadSavedItems());
@@ -303,25 +361,33 @@ export function ChatWindow() {
   }, []);
 
   useEffect(() => {
-    if (!isSessionLimitReached || sessionSaved || turns.length === 0) {
+    if (!currentSessionId) {
+      return;
+    }
+    if (turns.length === 0) {
       return;
     }
 
-    saveConversationSession(buildConversationSession(turns));
-    setConversationSessions(loadConversationSessions());
-    setSessionSaved(true);
-  }, [isSessionLimitReached, sessionSaved, turns]);
+    const firstMessage = turns[0]?.userMessage || "Conversation Session";
+    const session: ConversationSession = {
+      id: currentSessionId,
+      title:
+        firstMessage.length > 28 ? `${firstMessage.slice(0, 28)}...` : firstMessage,
+      createdAt: currentSessionCreatedAt,
+      endedAt: sessionEnded ? Date.now() : undefined,
+      messageCount: turns.length,
+      messages: toSessionMessages(turns),
+    };
 
-  const syncDailyCounter = () => {
-    const currentDay = getTodayKey();
-    if (currentDay !== todayKey) {
-      setTodayKey(currentDay);
-      setMessagesToday(0);
-      setSessionSaved(false);
-      return 0;
+    saveConversationSession(session);
+    setConversationSessions(loadConversationSessions());
+  }, [turns, currentSessionId, currentSessionCreatedAt, sessionEnded]);
+
+  useEffect(() => {
+    if (isSessionLimitReached && !sessionEnded) {
+      setSessionEnded(true);
     }
-    return messagesToday;
-  };
+  }, [isSessionLimitReached, sessionEnded]);
 
   const sendChatMessage = async (message: string) => {
     const response = await fetch("/api/chat", {
@@ -387,52 +453,34 @@ export function ChatWindow() {
     if (!item) {
       return;
     }
-
     saveSavedItem(item);
     setSavedItems(loadSavedItems());
   };
 
-  const handleStartNewSession = () => {
-    if (!sessionSaved && turns.length > 0) {
-      saveConversationSession(buildConversationSession(turns));
-      setConversationSessions(loadConversationSessions());
-    }
-
+  const startNewChat = () => {
     setTurns([]);
-    setMessagesToday(0);
     setInput("");
     setMode("chat");
-    setSessionSaved(false);
-    setIsContinueUnlocked(false);
+    setSessionEnded(false);
+    setCurrentSessionId(makeSessionId());
+    setCurrentSessionCreatedAt(Date.now());
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const handleContinueCurrentSession = () => {
-    if (IS_FREE_MODE) {
-      return;
-    }
-
-    // Premium flow placeholder: unlock input while preserving same thread/context.
-    setIsContinueUnlocked(true);
-  };
-
-  const handleEndSession = () => {
+  const endCurrentSession = () => {
     if (turns.length === 0) {
+      startNewChat();
       return;
     }
 
-    handleStartNewSession();
+    setSessionEnded(true);
+    startNewChat();
   };
 
   const handleSend = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || isSending) {
-      return;
-    }
-
-    const currentCount = syncDailyCounter();
-    if (currentCount >= SESSION_MESSAGE_LIMIT) {
+    if (!trimmed || isSending || isInputDisabled) {
       return;
     }
 
@@ -443,7 +491,6 @@ export function ChatWindow() {
       } else {
         await sendChatMessage(trimmed);
       }
-      setMessagesToday((count) => count + 1);
       setInput("");
     } catch {
       setTurns((previous) => [
@@ -479,12 +526,7 @@ export function ChatWindow() {
 
   const handleUseExpressionAsMessage = async (text: string) => {
     const message = text.trim();
-    if (!message || isSending) {
-      return;
-    }
-
-    const currentCount = syncDailyCounter();
-    if (currentCount >= SESSION_MESSAGE_LIMIT) {
+    if (!message || isSending || isInputDisabled) {
       return;
     }
 
@@ -492,7 +534,6 @@ export function ChatWindow() {
     setIsSending(true);
     try {
       await sendChatMessage(message);
-      setMessagesToday((count) => count + 1);
     } catch {
       setTurns((previous) => [
         ...previous,
@@ -563,6 +604,15 @@ export function ChatWindow() {
     }
   };
 
+  const openConversationSession = (session: ConversationSession) => {
+    setCurrentSessionId(session.id);
+    setCurrentSessionCreatedAt(session.createdAt);
+    setSessionEnded(false);
+    setTurns(fromSessionMessages(session.messages));
+    setMode("chat");
+    setIsArchiveOpen(false);
+  };
+
   return (
     <>
       <section className="flex h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-lg">
@@ -571,7 +621,7 @@ export function ChatWindow() {
             <div>
               <h1 className="text-lg font-semibold text-slate-900">{ui.appTitle}</h1>
               <p className="text-xs text-slate-500">
-                {ui.freeTraining} · {ui.messagesUsed}: {messagesToday}/{SESSION_MESSAGE_LIMIT}
+                {ui.freeTraining} · {ui.messagesUsed}: {turns.length}/{SESSION_MESSAGE_LIMIT}
               </p>
             </div>
             <div className="flex flex-col items-end gap-2">
@@ -579,7 +629,7 @@ export function ChatWindow() {
               <div className="flex gap-1">
                 <button
                   type="button"
-                  onClick={handleEndSession}
+                  onClick={endCurrentSession}
                   className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
                 >
                   {ui.endSession}
@@ -713,18 +763,9 @@ export function ChatWindow() {
             <div className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-slate-50 p-5 text-center shadow-sm">
               <p className="text-base font-semibold text-slate-900">{ui.sessionComplete}</p>
               <div className="mt-4 flex flex-wrap justify-center gap-2">
-                {!IS_FREE_MODE && (
-                  <button
-                    type="button"
-                    onClick={handleContinueCurrentSession}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 transition hover:bg-slate-100"
-                  >
-                    {ui.continuePractice}
-                  </button>
-                )}
                 <button
                   type="button"
-                  onClick={handleStartNewSession}
+                  onClick={startNewChat}
                   className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white transition hover:bg-slate-700"
                 >
                   {ui.startNewSession}
@@ -810,6 +851,7 @@ export function ChatWindow() {
             clearConversationSessions();
             setConversationSessions(loadConversationSessions());
           }}
+          onOpenConversationSession={openConversationSession}
         />
       )}
     </>

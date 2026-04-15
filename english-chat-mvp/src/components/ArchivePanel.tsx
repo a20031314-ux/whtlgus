@@ -41,6 +41,7 @@ type ArchivePanelProps = {
   onClearSavedItems: () => void;
   onDeleteConversationSession: (id: string) => void;
   onClearConversationSessions: () => void;
+  onOpenConversationSession: (session: ConversationSession) => void;
 };
 
 function formatDate(timestamp: number) {
@@ -57,9 +58,9 @@ export function ArchivePanel({
   onClearSavedItems,
   onDeleteConversationSession,
   onClearConversationSessions,
+  onOpenConversationSession,
 }: ArchivePanelProps) {
   const [activeTab, setActiveTab] = useState<ArchiveTab>("saved");
-  const [openedSessionId, setOpenedSessionId] = useState<string | null>(null);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/30 sm:items-center sm:justify-center">
@@ -181,7 +182,6 @@ export function ArchivePanel({
                 {ui.clearSessions}
               </button>
               {conversationSessions.map((session) => {
-                const isOpen = openedSessionId === session.id;
                 return (
                   <article
                     key={session.id}
@@ -192,25 +192,10 @@ export function ArchivePanel({
                       {formatDate(session.createdAt)} · {session.messageCount} {ui.messagesUsed}
                     </p>
 
-                    {isOpen && (
-                      <div className="mt-2 space-y-1 rounded-lg bg-white p-2 text-xs text-slate-700">
-                        {session.messages.map((message) => (
-                          <p key={message.id}>
-                            <span className="font-semibold">{message.role}: </span>
-                            {message.content}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-
                     <div className="mt-3 flex gap-2">
                       <button
                         type="button"
-                        onClick={() =>
-                          setOpenedSessionId((previous) =>
-                            previous === session.id ? null : session.id,
-                          )
-                        }
+                        onClick={() => onOpenConversationSession(session)}
                         className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
                       >
                         {ui.openSession}
